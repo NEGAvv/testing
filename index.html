@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Statistics Tracker</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: monospace; background: #f5f5f5; color: #222; padding: 16px; }
+  h1 { font-size: 18px; margin-bottom: 16px; }
+
+  #login-screen { max-width: 320px; margin: 80px auto; background: #fff; padding: 24px; border: 1px solid #ddd; }
+  #login-screen h2 { margin-bottom: 16px; font-size: 16px; }
+  #login-screen select,
+  #login-screen input { width: 100%; padding: 8px; border: 1px solid #ccc; font-family: monospace; font-size: 14px; margin-bottom: 12px; }
+  #login-screen label { font-size: 13px; display: block; margin-bottom: 4px; }
+  #login-screen button { width: 100%; padding: 8px; background: #222; color: #fff; border: none; cursor: pointer; font-family: monospace; font-size: 14px; }
+  #login-screen button:disabled { background: #999; cursor: default; }
+  #login-error { color: red; font-size: 13px; margin-top: 8px; }
+
+  #app { display: none; }
+  .info-bar { background: #fff; border: 1px solid #ddd; padding: 10px 14px; margin-bottom: 14px; font-size: 13px; color: #555; }
+  .info-bar strong { color: #222; }
+
+  .grid { display: grid; grid-template-columns: 1fr; gap: 6px; max-width: 520px; }
+  .row { background: #fff; border: 1px solid #ddd; padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; }
+  .row-label { font-size: 13px; flex: 1; }
+  .counter { display: flex; align-items: center; gap: 10px; }
+  .counter button { width: 30px; height: 30px; border: 1px solid #ccc; background: #f5f5f5; cursor: pointer; font-size: 17px; font-family: monospace; line-height: 1; }
+  .counter button:hover { background: #e0e0e0; }
+  .counter span { font-size: 16px; font-weight: bold; min-width: 30px; text-align: center; }
+
+  .actions { margin-top: 14px; display: flex; gap: 10px; flex-wrap: wrap; max-width: 520px; }
+  .actions button { padding: 10px 20px; font-family: monospace; font-size: 13px; border: 1px solid #ccc; cursor: pointer; background: #fff; }
+  #sync-btn { background: #222; color: #fff; border-color: #222; }
+  #sync-btn:disabled { background: #999; border-color: #999; cursor: default; }
+  #reset-btn { color: #c00; border-color: #c00; }
+  #status { margin-top: 10px; font-size: 13px; color: #555; max-width: 520px; }
+</style>
+</head>
+<body>
+
+<div id="login-screen">
+  <h2>Login</h2>
+  <label>Shift</label>
+  <select id="shift-select">
+    <option value="morning">☀️ Morning (9:00–18:00)</option>
+    <option value="evening">🌙 Day (15:00–00:00)</option>
+  </select>
+  <label>PIN</label>
+  <input type="password" id="pin-input" placeholder="Enter PIN" />
+  <button id="login-btn" onclick="tryLogin()">Sign in</button>
+  <div id="login-error"></div>
+</div>
+
+<div id="app">
+  <h1>Statistics Tracker</h1>
+  <div class="info-bar">
+    Date: <strong id="date-label"></strong> &nbsp;|&nbsp; Shift: <strong id="shift-label"></strong>
+  </div>
+  <div class="grid" id="grid"></div>
+  <div class="actions">
+    <button id="sync-btn" onclick="syncToSheets()">⬆ Sync to Sheets</button>
+    <button id="reset-btn" onclick="resetCounters()">↺ Reset</button>
+  </div>
+  <div id="status"></div>
+</div>
+
+<script>
+const SCRIPT_URL = "https://script.google.com/a/macros/gen.tech/s/AKfycbxCyp-8B75_RPQA2AyLEHIPuaWyduGeMwZNXVPMQt_UqWYd355fE9JpEyqTQcvmptNr/exec";
+
+const PIN_HASHES = {
+  morning: "e04f40e207e82c1a659933e3474a2e3386937b9c0f852ef6e33adaf1f100883a",
+  evening: "67fdfc84e2a423395dfa9387814e17f32fa447ddd00988fcd547023b507acb2c"
+};
+
+const METRICS = [
+  "Comments hidden fb",
+  "Comments replied fb",
+  "Comments hidden inst",
+  "Comments replied inst",
+  "Inst dm replies",
+  "Trustpilot reviews follow up",
+  "Trustpilot reviews replies",
+  "App store reviews replies",
+  "App store follow up",
+  "Google Play reviews replies",
+  "Google Play follow up"
+];
+
+const SHIFT_LABELS = { morning: "☀️ Morning", evening: "🌙 Evening" };
+
+let currentShift = null;
+let counters = {};
+
+async function sha256(text) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function tryLogin() {
+  const shift = document.getElementById("shift-select").value;
+  const pin = document.getElementById("pin-input").value;
+  const btn = document.getElementById("login-btn");
+  const err = document.getElementById("login-error");
+
+  if (!pin) { err.textContent = "Please enter PIN"; return; }
+
+  btn.disabled = true;
+  btn.textContent = "Checking...";
+  err.textContent = "";
+
+  const hashed = await sha256(pin);
+
+  if (hashed === PIN_HASHES[shift]) {
+    currentShift = shift;
+    document.getElementById("login-screen").style.display = "none";
+    document.getElementById("app").style.display = "block";
+    init();
+  } else {
+    err.textContent = "Incorrect PIN";
+    btn.disabled = false;
+    btn.textContent = "Sign in";
+  }
+}
+
+document.getElementById("pin-input").addEventListener("keydown", e => {
+  if (e.key === "Enter") tryLogin();
+});
+
+function today() {
+  const d = new Date();
+  return String(d.getDate()).padStart(2, "0") + "." +
+         String(d.getMonth() + 1).padStart(2, "0") + "." +
+         d.getFullYear();
+}
+
+function storageKey() {
+  return "stats_" + currentShift + "_" + today();
+}
+
+function loadFromStorage() {
+  const saved = localStorage.getItem(storageKey());
+  counters = saved ? JSON.parse(saved) : Object.fromEntries(METRICS.map(m => [m, 0]));
+}
+
+function saveToStorage() {
+  localStorage.setItem(storageKey(), JSON.stringify(counters));
+}
+
+function init() {
+  document.getElementById("date-label").textContent = today();
+  document.getElementById("shift-label").textContent = SHIFT_LABELS[currentShift];
+  loadFromStorage();
+  renderGrid();
+}
+
+function renderGrid() {
+  const grid = document.getElementById("grid");
+  grid.innerHTML = "";
+  METRICS.forEach(metric => {
+    const id = "val-" + metric.replace(/\s/g, "_");
+    const row = document.createElement("div");
+    row.className = "row";
+    row.innerHTML = `
+      <div class="row-label">${metric}</div>
+      <div class="counter">
+        <button onclick="change('${metric}', -1)">−</button>
+        <span id="${id}">${counters[metric]}</span>
+        <button onclick="change('${metric}', 1)">+</button>
+      </div>`;
+    grid.appendChild(row);
+  });
+}
+
+function change(metric, delta) {
+  counters[metric] = Math.max(0, (counters[metric] || 0) + delta);
+  document.getElementById("val-" + metric.replace(/\s/g, "_")).textContent = counters[metric];
+  saveToStorage();
+}
+
+function resetCounters() {
+  if (!confirm("Reset all counters to 0?")) return;
+  METRICS.forEach(m => counters[m] = 0);
+  saveToStorage();
+  renderGrid();
+}
+
+async function syncToSheets() {
+  const btn = document.getElementById("sync-btn");
+  const status = document.getElementById("status");
+  btn.disabled = true;
+  status.textContent = "Syncing...";
+
+  const payload = {
+    action: "sync",
+    date: today(),
+    shift: currentShift === "morning" ? "Morning" : "Evening",
+    data: counters
+  };
+
+  try {
+    await fetch(SCRIPT_URL, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    status.textContent = "✓ Synced at " + new Date().toLocaleTimeString("en-GB");
+  } catch (e) {
+    status.textContent = "✗ Sync failed. Check SCRIPT_URL.";
+  }
+
+  btn.disabled = false;
+}
+</script>
+</body>
+</html>
